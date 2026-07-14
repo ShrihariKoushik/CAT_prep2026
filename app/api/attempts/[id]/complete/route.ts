@@ -1,14 +1,16 @@
-// POST → finalize the set: score, level rule, streak/day rollup.
-// Idempotent AND race-safe: completion is "claimed" with a conditional update,
-// so two simultaneous submits can't double-apply the streak or level rule.
+// POST → finalize MY set: score, level rule, streak/day rollup. Idempotent + race-safe.
 import { prisma } from "@/lib/prisma";
-import { applyLevelRule, getUserState } from "@/lib/levels";
+import { sessionUserId } from "@/lib/auth";
+import { applyLevelRule } from "@/lib/levels";
 import { registerSessionCompletion, displayStreak } from "@/lib/streak";
 import { istToday } from "@/lib/time";
 import { QUESTIONS_PER_SET, type Section } from "@/lib/types";
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
+    const userId = await sessionUserId();
+    if (!userId) return Response.json({ error: "unauthorized" }, { status: 401 });
+
     const { id } = await ctx.params;
     const attempt = await prisma.setAttempt.findUnique({
       where: { id },
@@ -17,7 +19,9 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
         answers: true,
       },
     });
-    if (!attempt) return Response.json({ error: "attempt not found" }, { status: 404 });
+    if (!attempt || attempt.userId !== userId) {
+      return Response.json({ error: "attempt not found" }, { status: 404 });
+    }
 
     const buildBreakdown = () =>
       attempt.set.questions.map((q) => {
@@ -30,7 +34,7 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
           correctIndex: q.correctIndex,
           isCorrect: a?.isCorrect ?? false,
           flagged: a?.flagged ?? false,
-          explanation: q.explanation, // set is submitted — everything is revealed now
+          explanation: q.explanation,
           timeSpentSec: a?.timeSpentSec ?? null,
         };
       });
@@ -46,7 +50,6 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
     });
 
     if (count === 0) {
-      // Already completed (by an earlier submit or a concurrent one) — return the stored summary.
       const done = await prisma.setAttempt.findUnique({ where: { id } });
       return Response.json({
         score: done?.score ?? score,
@@ -60,18 +63,17 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
     }
 
     const today = istToday();
-    const { before, after } = await applyLevelRule(attempt.set.section as Section);
+    const { before, after } = await applyLevelRule(attempt.set.section as Section, userId);
     await prisma.setAttempt.update({ where: { id }, data: { levelAfter: after } });
-    await registerSessionCompletion(today, answered, score);
+    const user = await registerSessionCompletion(userId, today, answered, score);
 
-    const state = await getUserState();
     return Response.json({
       score,
       total: QUESTIONS_PER_SET,
       totalTimeSec,
       levelBefore: before,
       levelAfter: after,
-      streak: displayStreak(state, today),
+      streak: displayStreak(user, today),
       breakdown: buildBreakdown(),
     });
   } catch (e) {

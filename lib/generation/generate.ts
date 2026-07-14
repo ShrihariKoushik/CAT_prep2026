@@ -1,4 +1,4 @@
-// Generation pipeline. Server-side only — the API key never reaches the client.
+// Generation pipeline, per user. Server-side only — the API key never reaches the client.
 import Anthropic from "@anthropic-ai/sdk";
 import type { ZodType } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -22,32 +22,35 @@ type PersistQuestion = GeneratedQuestion & { contextOrder?: number; verified: bo
 // Entry points
 // ---------------------------------------------------------------------------
 
-/** Daily cron: generate all three sections for `day`. */
+/** Daily cron: generate all three sections for every user. */
 export async function cronGenerate(day: string) {
+  const users = await prisma.user.findMany({ select: { id: true, username: true } });
   const results: Record<string, string> = {};
-  for (const section of SECTIONS) {
-    results[section] = await generateWithLock(day, section);
+  for (const u of users) {
+    for (const section of SECTIONS) {
+      results[`${u.username}:${section}`] = await generateWithLock(day, section, u.id);
+    }
   }
   return results;
 }
 
 /**
- * Lock-guarded generation. Returns "skipped" if another worker holds the lock
- * or the set is already READY — safe to call from every page load.
+ * Lock-guarded generation for one user+section. Returns "skipped" if another
+ * worker holds the lock or the set is already READY — safe on every page load.
  */
-export async function generateWithLock(day: string, section: Section): Promise<string> {
+export async function generateWithLock(day: string, section: Section, userId: string): Promise<string> {
   const existing = await prisma.questionSet.findUnique({
-    where: { day_section: { day, section } },
+    where: { day_section_userId: { day, section, userId } },
     include: { attempt: true },
   });
   if (existing?.status === "READY") return "already-ready";
-  if (existing?.attempt) return "fallback-in-use"; // she started the fallback; don't yank it
+  if (existing?.attempt) return "fallback-in-use";
 
-  const lock = await acquireLock(day, section);
+  const lock = await acquireLock(day, section, userId);
   if (!lock) return "skipped";
 
   try {
-    await generateSection(day, section);
+    await generateSection(day, section, userId);
     await prisma.generationJob.update({
       where: { id: lock.id },
       data: { status: "SUCCESS", finishedAt: new Date(), error: null },
@@ -58,39 +61,40 @@ export async function generateWithLock(day: string, section: Section): Promise<s
       where: { id: lock.id },
       data: { status: "FAILED", finishedAt: new Date(), error: String(e).slice(0, 1000) },
     });
-    await createFallbackSet(day, section); // idempotent
+    await createFallbackSet(day, section, userId);
     return "failed-fallback";
   }
 }
 
 // ---------------------------------------------------------------------------
-// Lock: GenerationJob unique(day, section). Create wins; otherwise claim a
-// FAILED or stale-RUNNING row via conditional updateMany (atomic — exactly one
-// of two simultaneous page-opens gets count=1). Prevents duplicate API spend.
+// Lock: GenerationJob unique(day, section, userId). Create wins; otherwise
+// claim FAILED / stale-RUNNING via conditional updateMany (atomic).
 // ---------------------------------------------------------------------------
-async function acquireLock(day: string, section: Section) {
+async function acquireLock(day: string, section: Section, userId: string) {
   try {
-    return await prisma.generationJob.create({ data: { day, section } });
+    return await prisma.generationJob.create({ data: { day, section, userId } });
   } catch {
     const stale = new Date(Date.now() - LOCK_STALE_MS);
     const { count } = await prisma.generationJob.updateMany({
       where: {
-        day, section,
+        day, section, userId,
         OR: [{ status: "FAILED" }, { status: "RUNNING", startedAt: { lt: stale } }],
       },
       data: { status: "RUNNING", startedAt: new Date(), finishedAt: null },
     });
-    if (count === 0) return null; // RUNNING and fresh, or already SUCCESS
-    return prisma.generationJob.findUnique({ where: { day_section: { day, section } } });
+    if (count === 0) return null;
+    return prisma.generationJob.findUnique({
+      where: { day_section_userId: { day, section, userId } },
+    });
   }
 }
 
 // ---------------------------------------------------------------------------
 // Core generation
 // ---------------------------------------------------------------------------
-async function generateSection(day: string, section: Section) {
-  const level = await currentLevel(section);
-  const recentTopics = await recentTopicsFor(section, day);
+async function generateSection(day: string, section: Section, userId: string) {
+  const level = await currentLevel(section, userId);
+  const recentTopics = await recentTopicsFor(section, day, userId);
   const assignedTopics = sampleTopics(section, recentTopics);
   const input: GenerationInput = { section, level, assignedTopics, recentTopics, day };
 
@@ -126,26 +130,25 @@ async function generateSection(day: string, section: Section) {
     }
   }
 
-  await persistSet(day, section, level, assignedTopics, contexts, questions);
+  await persistSet(day, section, userId, level, assignedTopics, contexts, questions);
 }
 
 async function persistSet(
-  day: string, section: Section, level: number, topics: string[],
+  day: string, section: Section, userId: string, level: number, topics: string[],
   contexts: PersistContext[], questions: PersistQuestion[],
 ) {
   await prisma.$transaction(async (tx) => {
-    // Replace an unstarted fallback set if present
     const old = await tx.questionSet.findUnique({
-      where: { day_section: { day, section } },
+      where: { day_section_userId: { day, section, userId } },
       include: { attempt: true },
     });
     if (old) {
       if (old.attempt) throw new Error("set already attempted; refusing to replace");
-      await tx.questionSet.delete({ where: { id: old.id } }); // cascades questions/contexts
+      await tx.questionSet.delete({ where: { id: old.id } });
     }
     const set = await tx.questionSet.create({
       data: {
-        day, section,
+        day, section, userId,
         slot: SLOT_FOR_SECTION[section],
         difficulty: level,
         status: "READY",
@@ -217,12 +220,12 @@ async function generateValidated<T>(prompt: string, schema: ZodType<T>): Promise
 }
 
 // ---------------------------------------------------------------------------
-// Topic sampling — 14-day no-repeat window, owned by us not the model
+// Topic sampling — per-user 14-day no-repeat window
 // ---------------------------------------------------------------------------
-async function recentTopicsFor(section: Section, day: string): Promise<string[]> {
+async function recentTopicsFor(section: Section, day: string, userId: string): Promise<string[]> {
   const since = istDayOffset(day, -14);
   const sets = await prisma.questionSet.findMany({
-    where: { section, day: { gte: since, lt: day }, isFallback: false },
+    where: { section, userId, day: { gte: since, lt: day }, isFallback: false },
     select: { promptTopics: true },
   });
   const topics = new Set<string>();
@@ -235,7 +238,7 @@ async function recentTopicsFor(section: Section, day: string): Promise<string[]>
 function sampleTopics(section: Section, recent: string[]): string[] {
   const pick = (pool: string[], n: number): string[] => {
     let avail = pool.filter((t) => !recent.includes(t));
-    if (avail.length < n) avail = [...pool]; // window exhausted the pool — allow repeats
+    if (avail.length < n) avail = [...pool];
     const out: string[] = [];
     while (out.length < n && avail.length) {
       const i = Math.floor(Math.random() * avail.length);
@@ -247,6 +250,5 @@ function sampleTopics(section: Section, recent: string[]): string[] {
 
   if (section === "QUANT") return pick(TOPIC_POOLS.QUANT, 10);
   if (section === "LRDI") return pick(TOPIC_POOLS.LRDI, 2);
-  // VARC: [passage area, 3 standalone kinds] — kinds always all three
   return [...pick(VARC_PASSAGE_AREAS, 1), ...VARC_STANDALONE_KINDS];
 }

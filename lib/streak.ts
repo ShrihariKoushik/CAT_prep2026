@@ -1,38 +1,32 @@
-// Streak + freeze + day rollup. Only FRESH set completions call into this —
-// Redo Mistakes never touches the streak (farmable otherwise).
-// FREEZE: one per calendar week, boundary = Monday 00:00 IST. Covers exactly
-// one missed day between lastActiveDay and today.
+// Streak + freeze + day rollup, per user. Only FRESH set completions call in —
+// Redo Mistakes never touches the streak. Freeze: one per calendar week,
+// boundary Monday 00:00 IST; covers exactly one missed day.
 import { prisma } from "./prisma";
 import { istDayOffset, mondayOf } from "./time";
-import { getUserState } from "./levels";
 
-type Db = typeof prisma;
-
-/** Replenish the weekly freeze if we've crossed a Monday-00:00-IST boundary. Call on read paths too. */
-export async function replenishFreeze(today: string, db: Db = prisma) {
-  const state = await getUserState(db);
+export async function replenishFreeze(userId: string, today: string) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   const monday = mondayOf(today);
-  if (state.freezeResetWeek !== monday) {
-    return db.userState.update({
-      where: { id: 1 },
+  if (user.freezeResetWeek !== monday) {
+    return prisma.user.update({
+      where: { id: userId },
       data: { freezeAvailable: true, freezeResetWeek: monday },
     });
   }
-  return state;
+  return user;
 }
 
-/** Register a completed fresh session. Updates DayLog, totals, and the streak. */
 export async function registerSessionCompletion(
+  userId: string,
   today: string,
   answered: number,
   correct: number,
-  db: Db = prisma,
 ) {
-  const state = await replenishFreeze(today, db);
+  const user = await replenishFreeze(userId, today);
 
-  const log = await db.dayLog.upsert({
-    where: { day: today },
-    create: { day: today, sessionsCompleted: 1, questionsAnswered: answered },
+  const log = await prisma.dayLog.upsert({
+    where: { day_userId: { day: today, userId } },
+    create: { day: today, userId, sessionsCompleted: 1, questionsAnswered: answered },
     update: {
       sessionsCompleted: { increment: 1 },
       questionsAnswered: { increment: answered },
@@ -44,42 +38,36 @@ export async function registerSessionCompletion(
     totalCorrect: { increment: correct },
   };
 
-  // First completion today → streak day earned
   if (log.sessionsCompleted === 1) {
     const yesterday = istDayOffset(today, -1);
     const twoAgo = istDayOffset(today, -2);
     let streak: number;
 
-    if (state.lastActiveDay === today) {
-      streak = state.currentStreak; // defensive; shouldn't happen when log was 0
-    } else if (state.lastActiveDay === yesterday) {
-      streak = state.currentStreak + 1;
-    } else if (state.lastActiveDay === twoAgo && state.freezeAvailable) {
-      // exactly one missed day + freeze available → streak survives
-      streak = state.currentStreak + 1;
+    if (user.lastActiveDay === today) {
+      streak = user.currentStreak;
+    } else if (user.lastActiveDay === yesterday) {
+      streak = user.currentStreak + 1;
+    } else if (user.lastActiveDay === twoAgo && user.freezeAvailable) {
+      streak = user.currentStreak + 1;
       data.freezeAvailable = false;
-      await db.dayLog.upsert({
-        where: { day: yesterday },
-        create: { day: yesterday, freezeUsed: true },
+      await prisma.dayLog.upsert({
+        where: { day_userId: { day: yesterday, userId } },
+        create: { day: yesterday, userId, freezeUsed: true },
         update: { freezeUsed: true },
       });
     } else {
-      streak = 1; // gap too big or no freeze — start over
+      streak = 1;
     }
 
     data.currentStreak = streak;
-    data.longestStreak = Math.max(state.longestStreak, streak);
+    data.longestStreak = Math.max(user.longestStreak, streak);
     data.lastActiveDay = today;
   }
 
-  return db.userState.update({ where: { id: 1 }, data: data as never });
+  return prisma.user.update({ where: { id: userId }, data: data as never });
 }
 
-/**
- * Streak as it should DISPLAY right now (state only updates on completions):
- * still alive if last activity was today/yesterday, or two days ago with a
- * freeze in hand (completing today would save it). Otherwise 0.
- */
+/** Streak as it should display right now (state only updates on completions). */
 export function displayStreak(
   state: { currentStreak: number; lastActiveDay: string | null; freezeAvailable: boolean },
   today: string,

@@ -1,8 +1,6 @@
-// POST (or GET) with Authorization: Bearer CRON_SECRET →
-// wipe all personal state so the app starts fresh (name prompt, streak 0,
-// levels 1, empty archive of attempts). Generated question sets are kept
-// unless ?sets=1 is passed, which deletes them too (next open regenerates).
-// Use before handing the app over after testing.
+// Factory reset, protected by CRON_SECRET (Authorization: Bearer …).
+// Deletes ALL users and their data — next visitor signs up fresh (and becomes
+// admin, since they're the first user again). Use between testing rounds.
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -13,20 +11,15 @@ async function reset(req: Request) {
     return new Response("unauthorized", { status: 401 });
   }
 
-  const wipeSets = new URL(req.url).searchParams.get("sets") === "1";
-
   await prisma.questionAttempt.deleteMany({});
   await prisma.setAttempt.deleteMany({});
   await prisma.reviewItem.deleteMany({});
   await prisma.dayLog.deleteMany({});
-  await prisma.userState.deleteMany({}); // recreated (blank) on next page load
+  await prisma.questionSet.deleteMany({}); // cascades questions + contexts
+  await prisma.generationJob.deleteMany({});
+  await prisma.user.deleteMany({});
 
-  if (wipeSets) {
-    await prisma.questionSet.deleteMany({}); // cascades questions + contexts
-    await prisma.generationJob.deleteMany({});
-  }
-
-  return Response.json({ ok: true, wipedSets: wipeSets });
+  return Response.json({ ok: true });
 }
 
 export async function POST(req: Request) {

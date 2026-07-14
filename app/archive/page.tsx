@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { currentUser } from "@/lib/auth";
 import { SECTION_SHORT, SECTIONS, type Section } from "@/lib/types";
 import type { Prisma } from "@prisma/client";
 
@@ -11,14 +13,18 @@ const L = ["A", "B", "C", "D"];
 type SP = { section?: string; level?: string; date?: string; wrong?: string; page?: string };
 
 export default async function ArchivePage({ searchParams }: { searchParams: Promise<SP> }) {
+  const user = await currentUser();
+  if (!user) redirect("/login");
+
   const sp = await searchParams;
   const page = Math.max(1, parseInt(sp.page ?? "1", 10) || 1);
 
-  const where: Prisma.QuestionWhereInput = {};
+  // Only MY questions: every question belongs to a per-user set.
+  const where: Prisma.QuestionWhereInput = { set: { userId: user.id } };
   if (sp.section && SECTIONS.includes(sp.section as Section)) where.section = sp.section;
   if (sp.level) where.difficulty = parseInt(sp.level, 10) || undefined;
-  if (sp.date) where.set = { day: sp.date };
-  if (sp.wrong === "1") where.attempts = { some: { isCorrect: false } };
+  if (sp.date) where.set = { userId: user.id, day: sp.date };
+  if (sp.wrong === "1") where.attempts = { some: { isCorrect: false, userId: user.id } };
 
   const [questions, total] = await Promise.all([
     prisma.question.findMany({
@@ -26,7 +32,7 @@ export default async function ArchivePage({ searchParams }: { searchParams: Prom
       include: {
         set: true,
         context: true,
-        attempts: { where: { isRedo: false }, orderBy: { answeredAt: "desc" }, take: 1 },
+        attempts: { where: { isRedo: false, userId: user.id }, orderBy: { answeredAt: "desc" }, take: 1 },
       },
       orderBy: [{ set: { day: "desc" } }, { orderInSet: "asc" }],
       skip: (page - 1) * PAGE_SIZE,

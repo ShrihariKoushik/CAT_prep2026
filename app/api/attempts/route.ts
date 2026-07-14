@@ -1,25 +1,28 @@
-// POST { setId } → start (or resume) the attempt for a set. Idempotent:
-// concurrent calls (React StrictMode double-fires effects in dev) both get
-// the same attempt back instead of one crashing on the unique constraint.
+// POST { setId } → start (or resume) the attempt for one of MY sets. Idempotent.
 import { prisma } from "@/lib/prisma";
+import { sessionUserId } from "@/lib/auth";
 import { currentLevel } from "@/lib/levels";
 import { istToday, unlockAtMs } from "@/lib/time";
 import type { Section, Slot } from "@/lib/types";
 
 export async function POST(req: Request) {
   try {
+    const userId = await sessionUserId();
+    if (!userId) return Response.json({ error: "unauthorized" }, { status: 401 });
+
     const { setId } = await req.json();
     const set = await prisma.questionSet.findUnique({
       where: { id: setId },
       include: { attempt: true },
     });
-    if (!set) return Response.json({ error: "set not found" }, { status: 404 });
+    if (!set || set.userId !== userId) {
+      return Response.json({ error: "set not found" }, { status: 404 });
+    }
 
     if (set.attempt) {
       return Response.json({ attemptId: set.attempt.id, resumed: true });
     }
 
-    // Only today's sets are startable, and only after their slot unlocks.
     const today = istToday();
     if (set.day !== today) {
       return Response.json({ error: "this set has moved to the archive" }, { status: 403 });
@@ -30,11 +33,10 @@ export async function POST(req: Request) {
 
     try {
       const attempt = await prisma.setAttempt.create({
-        data: { setId, levelBefore: await currentLevel(set.section as Section) },
+        data: { setId, userId, levelBefore: await currentLevel(set.section as Section, userId) },
       });
       return Response.json({ attemptId: attempt.id, resumed: false });
     } catch (e: unknown) {
-      // P2002 = a concurrent request created it first — return that one.
       if (e && typeof e === "object" && "code" in e && (e as { code: string }).code === "P2002") {
         const existing = await prisma.setAttempt.findUnique({ where: { setId } });
         if (existing) return Response.json({ attemptId: existing.id, resumed: true });

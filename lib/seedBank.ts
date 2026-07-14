@@ -249,30 +249,30 @@ const SEEDS: Record<Section, { contexts: SeedContext[]; questions: SeedQuestion[
   LRDI: { contexts: LRDI_CONTEXTS, questions: LRDI_SEED },
 };
 
-/** Create (idempotently) a FALLBACK set for day+section from the seed bank. */
-export async function createFallbackSet(day: string, section: Section) {
+/** Create (idempotently) a FALLBACK set for day+section+user from the seed bank. */
+export async function createFallbackSet(day: string, section: Section, userId: string) {
   const existing = await prisma.questionSet.findUnique({
-    where: { day_section: { day, section } },
+    where: { day_section_userId: { day, section, userId } },
   });
   if (existing) return existing;
 
   try {
-    return await createFallbackSetInner(day, section);
+    return await createFallbackSetInner(day, section, userId);
   } catch (e: unknown) {
     // Unique-constraint race: a concurrent request created it first — that's fine.
     if (e && typeof e === "object" && "code" in e && (e as { code: string }).code === "P2002") {
-      return prisma.questionSet.findUnique({ where: { day_section: { day, section } } });
+      return prisma.questionSet.findUnique({ where: { day_section_userId: { day, section, userId } } });
     }
     throw e;
   }
 }
 
-async function createFallbackSetInner(day: string, section: Section) {
+async function createFallbackSetInner(day: string, section: Section, userId: string) {
   const seed = SEEDS[section];
   return prisma.$transaction(async (tx) => {
     const set = await tx.questionSet.create({
       data: {
-        day, section,
+        day, section, userId,
         slot: SLOT_FOR_SECTION[section],
         difficulty: 1,
         status: "FALLBACK",

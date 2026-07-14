@@ -1,12 +1,16 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { currentUser } from "@/lib/auth";
 import { SECTION_LABEL, TIMER_SECONDS, type Section } from "@/lib/types";
 import QuizRunner, { type ClientQuestion, type InitialAnswer } from "@/components/QuizRunner";
 
 export const dynamic = "force-dynamic";
 
 export default async function QuizPage({ params }: { params: Promise<{ setId: string }> }) {
+  const user = await currentUser();
+  if (!user) redirect("/login");
+
   const { setId } = await params;
   const set = await prisma.questionSet.findUnique({
     where: { id: setId },
@@ -15,7 +19,7 @@ export default async function QuizPage({ params }: { params: Promise<{ setId: st
       attempt: { include: { answers: true } },
     },
   });
-  if (!set) notFound();
+  if (!set || set.userId !== user.id) notFound();
 
   const section = set.section as Section;
 

@@ -1,11 +1,13 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { currentUser } from "@/lib/auth";
 import { getHomeData } from "@/lib/home";
 import { istHourNow } from "@/lib/time";
 import { quoteForDay } from "@/lib/quotes";
 import { SECTION_SHORT, SECTIONS } from "@/lib/types";
 import SessionCard from "@/components/SessionCard";
 import Heatmap from "@/components/Heatmap";
-import NamePrompt from "@/components/NamePrompt";
+import LogoutButton from "@/components/LogoutButton";
 
 export const dynamic = "force-dynamic";
 
@@ -17,29 +19,31 @@ function greeting() {
 }
 
 export default async function HomePage() {
-  const data = await getHomeData();
+  const user = await currentUser();
+  if (!user) redirect("/login");
 
-  if (!data.name) {
-    return (
-      <main className="pt-8 flex flex-col gap-6">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Daily CAT</h1>
-        </header>
-        <NamePrompt />
-      </main>
-    );
-  }
+  const data = await getHomeData(user);
 
   return (
     <main className="pt-8 flex flex-col gap-6">
-      <header>
-        <p className="text-sm text-ink-600 dark:text-cream-300">
-          {greeting()}, {data.name} ☀︎
-        </p>
-        <h1 className="text-2xl font-semibold tracking-tight">Daily CAT</h1>
-        <p className="mt-1 text-sm italic text-terra-600 dark:text-terra-200">
-          {quoteForDay(data.today)}
-        </p>
+      <header className="flex items-start justify-between">
+        <div>
+          <p className="text-sm text-ink-600 dark:text-cream-300">
+            {greeting()}, {data.name}
+          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">Daily CAT</h1>
+          <p className="mt-1 text-sm italic text-terra-600 dark:text-terra-200">
+            {quoteForDay(data.today)}
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1 pt-1">
+          {data.isAdmin && (
+            <Link href="/admin" className="text-xs text-terra-600 dark:text-terra-200">
+              admin
+            </Link>
+          )}
+          <LogoutButton />
+        </div>
       </header>
 
       {/* streak + levels */}

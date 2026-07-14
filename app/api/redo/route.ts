@@ -1,14 +1,22 @@
-// POST { questionId, chosenIndex } → answer a redo question.
-// Updates the SR schedule; never touches DayLog or the streak.
+// POST { questionId, chosenIndex } → answer one of MY redo questions.
 import { prisma } from "@/lib/prisma";
+import { sessionUserId } from "@/lib/auth";
 import { onWrongAnswer, onRedoCorrect } from "@/lib/sr";
 import { istToday } from "@/lib/time";
 
 export async function POST(req: Request) {
   try {
+    const userId = await sessionUserId();
+    if (!userId) return Response.json({ error: "unauthorized" }, { status: 401 });
+
     const { questionId, chosenIndex } = await req.json();
-    const question = await prisma.question.findUnique({ where: { id: questionId } });
-    if (!question) return Response.json({ error: "question not found" }, { status: 404 });
+    const question = await prisma.question.findUnique({
+      where: { id: questionId },
+      include: { set: true },
+    });
+    if (!question || question.set?.userId !== userId) {
+      return Response.json({ error: "question not found" }, { status: 404 });
+    }
     if (typeof chosenIndex !== "number" || chosenIndex < 0 || chosenIndex > 3) {
       return Response.json({ error: "chosenIndex must be 0-3" }, { status: 400 });
     }
@@ -17,12 +25,12 @@ export async function POST(req: Request) {
     const today = istToday();
 
     await prisma.questionAttempt.create({
-      data: { questionId, isRedo: true, chosenIndex, isCorrect },
+      data: { questionId, userId, isRedo: true, chosenIndex, isCorrect },
     });
 
     const item = isCorrect
       ? await onRedoCorrect(questionId, today)
-      : await onWrongAnswer(questionId, today);
+      : await onWrongAnswer(questionId, userId, today);
 
     return Response.json({
       isCorrect,
