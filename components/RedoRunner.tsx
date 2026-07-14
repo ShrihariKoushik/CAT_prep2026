@@ -1,7 +1,6 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { postJson } from "@/lib/clientFetch";
 import type { ClientQuestion } from "./QuizRunner";
 
@@ -16,10 +15,8 @@ export default function RedoRunner({ items }: { items: ClientQuestion[] }) {
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const router = useRouter();
   const goHome = () => {
-    router.push("/");
-    router.refresh();
+    window.location.assign("/");
   };
 
   if (done || items.length === 0) {

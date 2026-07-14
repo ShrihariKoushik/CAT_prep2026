@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { postJson } from "@/lib/clientFetch";
 
 export type ClientQuestion = {
@@ -94,12 +93,10 @@ export default function QuizRunner({
   const [error, setError] = useState<string | null>(null);
   const enteredAt = useRef(Date.now());
   const startedRef = useRef(false); // single-flight: StrictMode double-fires effects in dev
-  const router = useRouter();
-
-  // Programmatic back-nav: refresh ensures home shows current state (Continue/score).
+  // Plain browser navigation: immune to any client-router state, and a full
+  // load of "/" always shows fresh data. Progress is already saved server-side.
   const goHome = () => {
-    router.push("/");
-    router.refresh();
+    window.location.assign("/");
   };
 
   useEffect(() => {
