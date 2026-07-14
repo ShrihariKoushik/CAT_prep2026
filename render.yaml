@@ -7,7 +7,9 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install && npm run build
-    startCommand: npm start
+    # Bind explicitly to Render's assigned $PORT on all interfaces —
+    # otherwise Render's port scan can miss the app and kill the deploy.
+    startCommand: npx next start -p $PORT -H 0.0.0.0
     envVars:
       - key: DATABASE_URL
         sync: false # set in dashboard — Supabase pooled URL (port 6543, ?pgbouncer=true)
