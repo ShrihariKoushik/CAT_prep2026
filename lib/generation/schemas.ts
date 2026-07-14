@@ -20,8 +20,8 @@ export const VarcOutZ = z.object({
   passage: z.object({
     topicArea: z.enum(["economics", "philosophy", "science", "history", "sociology"]),
     title: z.string().min(3),
-    body: z.string().refine((b) => wordCount(b) >= 260 && wordCount(b) <= 400, {
-      message: "passage body must be 300-350 words (260-400 accepted)",
+    body: z.string().refine((b) => wordCount(b) >= 150 && wordCount(b) <= 400, {
+      message: "passage body must be 200-350 words depending on level (150-400 accepted)",
     }),
   }),
   rcQuestions: z.array(GeneratedQuestionZ).length(5),

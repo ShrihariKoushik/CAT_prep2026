@@ -12,17 +12,28 @@ export const MODEL = "claude-sonnet-4-6";
 // not a bare number.
 // ---------------------------------------------------------------------------
 export const DIFFICULTY_DESCRIPTORS: Record<number, string> = {
-  1: "Very basic. A bright 10th grader should solve this. Single-concept, one-step problems, friendly numbers.",
-  2: "Foundational/textbook. Direct formula application, at most two steps. NCERT class 10-12 level.",
-  3: "Early CAT prep. Standard question templates from coaching material, requires choosing the right approach.",
-  4: "Standard CAT prep. Two concepts combined, some algebraic manipulation, distractors based on common errors.",
-  5: "Upper CAT prep. Multi-step reasoning, less obvious setup, at least one genuinely tempting wrong option.",
-  6: "Actual CAT easy-slot difficulty. The kind of question a 90th-percentile aspirant solves in ~2 minutes.",
-  7: "Actual CAT medium difficulty. Non-obvious modelling step; brute force is possible but slow.",
-  8: "Actual CAT hard difficulty. Requires insight or an elegant shortcut; careless setups give a listed wrong answer.",
+  1: "Confidence builder. Class 6-8 school level. ONE tiny step, small friendly numbers, zero traps — wrong options are simply wrong, never designed to deceive. Anyone paying attention gets it right and feels good.",
+  2: "Very basic. A 10th grader solves this comfortably. Single concept, direct application, gentle numbers, no traps.",
+  3: "Foundational/textbook. Direct formula application, at most two steps. NCERT class 10-12 level.",
+  4: "Early CAT prep. Standard question templates from coaching material; requires choosing the right approach.",
+  5: "Standard CAT prep. Two concepts combined, some algebraic manipulation, distractors based on common errors.",
+  6: "Upper CAT prep. Multi-step reasoning, less obvious setup, at least one genuinely tempting wrong option.",
+  7: "Actual CAT easy-slot difficulty. The kind of question a 90th-percentile aspirant solves in ~2 minutes.",
+  8: "Actual CAT medium-hard difficulty. Non-obvious modelling step; brute force is possible but slow.",
   9: "CAT 99th-percentile / toughest-slot questions. Multiple layered constraints; most aspirants skip these.",
   10: "IIFT-hard / CAT outlier difficulty. The hardest fair question you can write — no tricks, no ambiguity, just depth.",
 };
+
+// Extra instructions injected at low levels: the goal there is confidence and
+// concept-building, not exam realism.
+export function gentleLevelNote(level: number): string {
+  if (level > 2) return "";
+  return `
+GENTLE MODE (levels 1-2): This student is building confidence from scratch.
+- Question text short and plain: max 2-3 sentences, everyday scenarios, small numbers.
+- NO trick options, NO traps. Wrong options are honestly wrong (e.g. an adjacent number), not engineered to catch a misstep.
+- Explanations first teach the underlying concept in one plain sentence ("Percentage just means 'out of 100'."), THEN show the solution. Still no fluff, but warm rather than terse.`;
+}
 
 // ---------------------------------------------------------------------------
 // Topic pools — the generator samples from these (minus the 14-day recent
@@ -122,6 +133,7 @@ export function buildQuantPrompt(i: GenerationInput): string {
 
 DIFFICULTY — Level ${i.level}/10: ${DIFFICULTY_DESCRIPTORS[i.level]}
 All 10 questions at this level. Order them easiest → hardest within the level.
+${gentleLevelNote(i.level)}
 
 TOPICS — use each of these exactly once, in any order:
 ${i.assignedTopics.map((t, n) => `${n + 1}. ${t}`).join("\n")}
@@ -141,8 +153,8 @@ export function buildVarcPrompt(i: GenerationInput): string {
 
 DIFFICULTY — Level ${i.level}/10: ${DIFFICULTY_DESCRIPTORS[i.level]}
 At low levels, difficulty means transparent passages and clearly distinguishable options. At high levels, dense argumentative prose and options that differ on fine distinctions of scope, tone, or inference — never trick wording.
-
-PASSAGE — topic area: ${passageArea}. 300-350 words. Non-fiction only: an argument, analysis, or explanation in the style of a serious magazine essay (Aeon, The Economist, LSE blog). It must take a position or develop a tension — not a neutral encyclopedia summary. Do not reuse themes from recent passages: ${i.recentTopics.join(", ") || "(none yet)"}.
+${gentleLevelNote(i.level)}
+PASSAGE — topic area: ${passageArea}. ${i.level <= 2 ? "200-250 words, simple vocabulary, one clear main idea." : "300-350 words."} Non-fiction only: an argument, analysis, or explanation in the style of a serious magazine essay (Aeon, The Economist, LSE blog). It must take a position or develop a tension — not a neutral encyclopedia summary. Do not reuse themes from recent passages: ${i.recentTopics.join(", ") || "(none yet)"}.
 
 RC QUESTIONS — exactly 5, kind "RC_PASSAGE_MCQ". The passage is displayed above each question in the app, so do NOT restate or quote large chunks of it in question text. Cover a mix of: main idea / primary purpose, specific inference, "the author would most likely agree/disagree", function of a phrase or example in context, strengthen/weaken or application. Wrong options must be wrong for classic RC reasons — out of scope, too extreme, distortion, true-but-not-asked — and the explanation must name which trap each wrong option is.
 
@@ -160,6 +172,7 @@ export function buildLrdiPrompt(i: GenerationInput): string {
   return `Generate today's LRDI questions as TWO self-contained mini-sets of 5 questions each. (Only the best 4 per mini-set will be served; write all 5 to full quality.)
 
 DIFFICULTY — Level ${i.level}/10: ${DIFFICULTY_DESCRIPTORS[i.level]}
+${gentleLevelNote(i.level)}${i.level <= 2 ? "\nAt this level: only 3-4 entities per puzzle, direct clues (\"A sits left of B\"), no negation chains, tiny tables with obvious read-offs." : ""}
 
 MINI-SET 1 — type: ${typeA}. MINI-SET 2 — type: ${typeB}.
 
