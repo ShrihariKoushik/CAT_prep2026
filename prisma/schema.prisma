@@ -1,0 +1,181 @@
+// Daily CAT — data model
+// Postgres (Supabase) via Prisma. Single-user: user-level state lives in UserState (singleton, id = 1).
+// All "day" fields are IST calendar dates as "YYYY-MM-DD" strings. Timestamps are UTC DateTimes.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")      // Supabase pooled connection (pgbouncer, port 6543)
+  directUrl = env("DIRECT_URL")        // Supabase direct connection (port 5432) — used by db:push/migrations
+}
+
+// Enums as validated strings (SQLite):
+// Section:      "QUANT" | "VARC" | "LRDI"
+// Slot:         "MORNING" | "AFTERNOON" | "EVENING"
+// SetStatus:    "READY" | "FALLBACK"   (a set row only exists once it has questions)
+// ContextKind:  "RC_PASSAGE" | "LRDI_SCENARIO"
+// QuestionKind: "MCQ" | "RC_PASSAGE_MCQ" | "PARA_JUMBLE" | "PARA_SUMMARY" | "ODD_ONE_OUT"
+// LOCKED/OPEN/EXPIRED are derived from the clock at request time; only completion persists.
+
+model QuestionSet {
+  id           String    @id @default(cuid())
+  day          String    // IST "YYYY-MM-DD"
+  section      String
+  slot         String
+  difficulty   Int       // level the set was generated AT — frozen even if her level later changes
+  status       String    @default("READY") // SetStatus
+  isFallback   Boolean   @default(false)   // served from seed bank
+  generatedAt  DateTime  @default(now())
+  model        String?   // audit: "claude-sonnet-4-6" or "seed-bank"
+  promptTopics String    @default("[]") // JSON array of assigned topics — feeds the 14-day no-repeat window
+
+  contexts  ContextBlock[]
+  questions Question[]
+  attempt   SetAttempt?
+
+  @@unique([day, section])
+  @@index([day])
+}
+
+// Shared context, written ONCE by the model and stored ONCE:
+// the VARC passage, or an LRDI scenario (two per LRDI set — one per mini-set).
+// UI renders the block above every question that references it. Question text is just the question.
+model ContextBlock {
+  id      String      @id @default(cuid())
+  setId   String
+  set     QuestionSet @relation(fields: [setId], references: [id], onDelete: Cascade)
+  kind    String      // ContextKind
+  title   String
+  body    String      // passage (300-350 words) or scenario incl. table/clues (<120 words)
+  order   Int         @default(0)
+
+  questions Question[]
+}
+
+model Question {
+  id           String        @id @default(cuid())
+  setId        String?
+  set          QuestionSet?  @relation(fields: [setId], references: [id], onDelete: Cascade)
+  contextId    String?
+  context      ContextBlock? @relation(fields: [contextId], references: [id])
+  isSeed       Boolean       @default(false)
+  section      String        // denormalised for archive filtering without a join
+  difficulty   Int
+  kind         String        // QuestionKind
+  topic        String
+  orderInSet   Int
+  text         String
+  options      String        // JSON array of exactly 4 strings
+  correctIndex Int           // 0-3
+  explanation  String        // fastest path + why each wrong option is wrong
+  verified     Boolean       @default(false) // passed the independent solve check (Quant/LRDI only)
+
+  attempts   QuestionAttempt[]
+  reviewItem ReviewItem?
+
+  @@index([section, difficulty])
+  @@index([topic])
+}
+
+model SetAttempt {
+  id           String      @id @default(cuid())
+  setId        String      @unique
+  set          QuestionSet @relation(fields: [setId], references: [id], onDelete: Cascade)
+  startedAt    DateTime    @default(now())
+  completedAt  DateTime?
+  score        Int?        // correct out of 8 (unanswered = wrong)
+  totalTimeSec Int?
+  levelBefore  Int
+  levelAfter   Int?
+
+  answers QuestionAttempt[]
+}
+
+// One answer. setAttemptId null + isRedo true = answered in Redo Mistakes mode.
+// Redo answers NEVER touch DayLog or streak — the streak is for fresh work only,
+// otherwise it can be farmed by re-answering questions whose explanations she's seen.
+model QuestionAttempt {
+  id           String      @id @default(cuid())
+  questionId   String
+  question     Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  setAttemptId String?
+  setAttempt   SetAttempt? @relation(fields: [setAttemptId], references: [id], onDelete: Cascade)
+  isRedo       Boolean     @default(false)
+  chosenIndex  Int?        // null = skipped
+  isCorrect    Boolean?
+  flagged      Boolean     @default(false)
+  timeSpentSec Int?
+  answeredAt   DateTime    @default(now())
+
+  @@unique([setAttemptId, questionId]) // NULL setAttemptIds don't collide in unique constraints → redo rows unaffected
+  @@index([questionId])
+  @@index([isCorrect])
+}
+
+// Spaced-repetition queue for Redo Mistakes. Surfaces ONLY via the "Redo mistakes"
+// entry point on the home screen — never occupies one of the three daily slots.
+// Stage → gap to next due: 0→1d, 1→3d, 2→7d, 3→21d. Correct at stage 3 retires it.
+// Wrong at any stage (fresh or redo) → back to stage 0, lapses+1.
+model ReviewItem {
+  id         String    @id @default(cuid())
+  questionId String    @unique
+  question   Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  stage      Int       @default(0)
+  dueOn      String    // IST "YYYY-MM-DD"
+  lapses     Int       @default(0)
+  retiredAt  DateTime?
+
+  @@index([dueOn])
+}
+
+// Per-day rollup. Drives streak math + 90-day heatmap without re-aggregating attempts.
+model DayLog {
+  id                String  @id @default(cuid())
+  day               String  @unique
+  sessionsCompleted Int     @default(0) // 0-3 → heatmap intensity
+  questionsAnswered Int     @default(0)
+  freezeUsed        Boolean @default(false) // this day was covered by a streak freeze
+}
+
+// Singleton (id = 1).
+// LEVEL RULE: a section's level changes only on a rolling average of the last 3
+// completed sets taken AT the current level (levelBefore == current level).
+// avg >= 75% → +1 (cap 10); avg < 40% → -1 (floor 1). Fewer than 3 sets at this
+// level → no change. Minimum 3 days per level; one bad morning or lucky set moves nothing.
+// FREEZE RULE: one freeze per calendar week, week boundary = MONDAY 00:00 IST.
+// freezeResetWeek stores the Monday date ("YYYY-MM-DD") of the week it was last
+// replenished; when mondayOf(today) differs, freezeAvailable resets to true.
+// A freeze silently covers exactly ONE missed day between lastActiveDay and today.
+model UserState {
+  id              Int     @id @default(1)
+  name            String? // asked once on first open; used in the greeting
+  levelQuant      Int     @default(1)
+  levelVarc       Int     @default(1)
+  levelLrdi       Int     @default(1)
+  currentStreak   Int     @default(0)
+  longestStreak   Int     @default(0)
+  lastActiveDay   String?
+  freezeAvailable Boolean @default(true)
+  freezeResetWeek String?
+  totalAnswered   Int     @default(0)
+  totalCorrect    Int     @default(0)
+}
+
+// Doubles as the GENERATION LOCK: unique (day, section) means only one worker can
+// hold a RUNNING row. Acquire = create, or updateMany-claim a FAILED/stale-RUNNING
+// row (stale = startedAt older than 5 min, i.e. a dead serverless invocation).
+// Two simultaneous page-opens race on the same row and exactly one wins — no double spend.
+model GenerationJob {
+  id         String    @id @default(cuid())
+  day        String
+  section    String
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  status     String    @default("RUNNING") // "RUNNING" | "SUCCESS" | "FAILED"
+  error      String?
+
+  @@unique([day, section])
+}

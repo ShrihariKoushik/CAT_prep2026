@@ -1,0 +1,10 @@
+node_modules/
+.next/
+# secrets — never commit (.env.example stays tracked as the template)
+.env
+.env.local
+.env.*.local
+prisma/dev.db
+prisma/dev.db-journal
+*.tsbuildinfo
+next-env.d.ts

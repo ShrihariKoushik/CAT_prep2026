@@ -1,0 +1,19 @@
+# Render blueprint. In Render: New → Blueprint → pick this repo.
+# Free plan note: the service spins down after ~15 min idle; first open after
+# that takes ~30-60s to wake. Fine for a personal app.
+services:
+  - type: web
+    name: daily-cat
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false # set in dashboard — Supabase pooled URL (port 6543, ?pgbouncer=true)
+      - key: DIRECT_URL
+        sync: false # Supabase direct URL (port 5432)
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CRON_SECRET
+        sync: false
