@@ -53,3 +53,29 @@ export async function currentUser() {
   if (!id) return null;
   return prisma.user.findUnique({ where: { id } });
 }
+
+// ---------------------------------------------------------------------------
+// Admin access: gated by a dedicated password (ADMIN_PASSWORD env), completely
+// independent of user accounts. Knowing the password sets a signed admin
+// cookie; no account flag grants admin anymore.
+// ---------------------------------------------------------------------------
+export const ADMIN_COOKIE = "dc_admin";
+
+export function adminPassword(): string {
+  return process.env.ADMIN_PASSWORD ?? "AdminCat2026";
+}
+
+export function makeAdminToken(): string {
+  const payload = `admin.${Date.now()}`;
+  return `${payload}.${sign(payload)}`;
+}
+
+export async function isAdminSession(): Promise<boolean> {
+  const jar = await cookies();
+  const token = jar.get(ADMIN_COOKIE)?.value;
+  if (!token) return false;
+  const i = token.lastIndexOf(".");
+  if (i <= 0) return false;
+  const payload = token.slice(0, i);
+  return payload.startsWith("admin.") && sign(payload) === token.slice(i + 1);
+}

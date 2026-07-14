@@ -1,19 +1,17 @@
 // Admin portal: every user's levels, streaks, totals, and recent sessions.
-// Admin = the first registered user. Read-only view of others' data.
+// Access = knowing the ADMIN_PASSWORD, independent of user accounts.
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { currentUser } from "@/lib/auth";
+import { isAdminSession } from "@/lib/auth";
 import { istToday } from "@/lib/time";
 import { displayStreak } from "@/lib/streak";
 import { SECTION_SHORT, type Section } from "@/lib/types";
+import AdminGate from "@/components/AdminGate";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminPage() {
-  const me = await currentUser();
-  if (!me) redirect("/login");
-  if (!me.isAdmin) redirect("/");
+  if (!(await isAdminSession())) return <AdminGate />;
 
   const today = istToday();
   const users = await prisma.user.findMany({

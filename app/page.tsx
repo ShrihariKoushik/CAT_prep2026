@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { currentUser } from "@/lib/auth";
+import { currentUser, isAdminSession } from "@/lib/auth";
 import { getHomeData } from "@/lib/home";
 import { istHourNow } from "@/lib/time";
 import { quoteForDay } from "@/lib/quotes";
@@ -23,6 +23,7 @@ export default async function HomePage() {
   if (!user) redirect("/login");
 
   const data = await getHomeData(user);
+  const admin = await isAdminSession(); // link shows only after admin-password entry; /admin itself is always gated
 
   return (
     <main className="pt-8 flex flex-col gap-6">
@@ -37,7 +38,7 @@ export default async function HomePage() {
           </p>
         </div>
         <div className="flex flex-col items-end gap-1 pt-1">
-          {data.isAdmin && (
+          {admin && (
             <Link href="/admin" className="text-xs text-terra-600 dark:text-terra-200">
               admin
             </Link>
