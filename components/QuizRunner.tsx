@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { postJson } from "@/lib/clientFetch";
 
 export type ClientQuestion = {
@@ -93,6 +94,13 @@ export default function QuizRunner({
   const [error, setError] = useState<string | null>(null);
   const enteredAt = useRef(Date.now());
   const startedRef = useRef(false); // single-flight: StrictMode double-fires effects in dev
+  const router = useRouter();
+
+  // Programmatic back-nav: refresh ensures home shows current state (Continue/score).
+  const goHome = () => {
+    router.push("/");
+    router.refresh();
+  };
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -225,13 +233,14 @@ export default function QuizRunner({
     return (
       <div className="flex flex-col gap-5 pt-8">
         <div className="flex items-center gap-3">
-          <Link
-            href="/"
+          <button
+            type="button"
+            onClick={goHome}
             aria-label="Back home — progress is saved"
             className="rounded-full border border-cream-300 dark:border-night-600 px-3 py-1.5 text-sm"
           >
             ←
-          </Link>
+          </button>
           <h1 className="text-xl font-semibold">Review</h1>
         </div>
         <div className="grid grid-cols-4 gap-2">
@@ -275,13 +284,14 @@ export default function QuizRunner({
     <div className="flex flex-col gap-4 pt-6">
       <div className="flex items-center justify-between text-sm text-ink-600 dark:text-cream-300">
         <span className="flex items-center gap-2">
-          <Link
-            href="/"
+          <button
+            type="button"
+            onClick={goHome}
             aria-label="Back home — progress is saved"
             className="rounded-full border border-cream-300 dark:border-night-600 px-3 py-1.5 -ml-1"
           >
             ←
-          </Link>
+          </button>
           {sectionLabel} · {idx + 1}/{questions.length}
         </span>
         <button onClick={() => setTimerOn((t) => !t)} className="tabular-nums">

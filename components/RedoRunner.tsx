@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { postJson } from "@/lib/clientFetch";
 import type { ClientQuestion } from "./QuizRunner";
 
@@ -15,6 +16,11 @@ export default function RedoRunner({ items }: { items: ClientQuestion[] }) {
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  const goHome = () => {
+    router.push("/");
+    router.refresh();
+  };
 
   if (done || items.length === 0) {
     return (
@@ -63,13 +69,14 @@ export default function RedoRunner({ items }: { items: ClientQuestion[] }) {
   return (
     <div className="flex flex-col gap-4 pt-6">
       <div className="flex items-center gap-2 text-sm text-ink-600 dark:text-cream-300">
-        <Link
-          href="/"
+        <button
+          type="button"
+          onClick={goHome}
           aria-label="Back home"
           className="rounded-full border border-cream-300 dark:border-night-600 px-3 py-1.5"
         >
           ←
-        </Link>
+        </button>
         Redo mistakes · {idx + 1}/{items.length}
       </div>
 
